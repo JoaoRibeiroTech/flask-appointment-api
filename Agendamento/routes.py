@@ -1,5 +1,5 @@
 from Agendamento import app, database
-from flask_login import login_user, logout_user, login_manager
+from flask_login import login_manager
 from email_validator import validate_email, EmailNotValidError
 from flask import request, jsonify
 from Agendamento.utils import hash_password, check_password, send_email
@@ -34,6 +34,7 @@ def users():
     )
     database.session.add(user)
     database.session.commit()
+    return jsonify({'message':'User created succesfully'}), 201
 
 
 @app.route('/login', methods=['POST'])
@@ -54,12 +55,13 @@ def login():
 def create_appointments():
     data = request.json
     user_id = get_jwt_identity()
-    user = User.query.get(user_id)
     
     if not all(k in data for k in ['name', 'start_time', 'end_time']):
         return jsonify({'message': 'Missing data'}), 400
     
-    user_id = get_jwt_identity()
+    if not data.get('name') or len(data['name']) < 3:
+        return jsonify({'message': 'Invalid name'}), 400
+    
     user = User.query.get(user_id)
     if not user:
         return jsonify({'message':'User not found'}), 404
@@ -74,9 +76,9 @@ def create_appointments():
         return jsonify({'message':'Invalid time range'}), 400
     
     existing = Appointment.query.filter(
+        Appointment.user_id == user_id,
         Appointment.start_time < end_time,
-        Appointment.end_time > start_time
-    ).first()
+        Appointment.end_time > start_time).first()
     
     if existing:
         return jsonify({'message':'Time slot already booked'}), 409
@@ -89,19 +91,21 @@ def create_appointments():
     )
     database.session.add(appointment)
     database.session.commit()
+    
     send_email(
     to=user.email,
     subject="Appointment Confirmed",
     body=f"Your appointment is scheduled from {start_time} to {end_time}")
+    
     return jsonify({'message':'Appointment made'}), 201
 
-@app.route('/appointment', methods=['GET'])
+@app.route('/appointments', methods=['GET'])
 @jwt_required()
 def get_appointment():
     date_param = request.args.get('date')
     user_id = get_jwt_identity()
-    query = Appointment.query
-    query = query.filter(Appointment.user_id == user_id)
+    
+    query = Appointment.query.filter(Appointment.user_id == user_id)
     
     if date_param:
         try: 
@@ -117,16 +121,16 @@ def get_appointment():
             Appointment.start_time < end_of_day
         )
     
-    appointments = Appointment.query.order_by(Appointment.start_time).all()
-    result = []
+    appointments = query.order_by(Appointment.start_time).all()
     
+    result = []
     for appointment in appointments:
         appointment_data = {
             'id': appointment.id,
             'name': appointment.name,
             'start_time': appointment.start_time.isoformat(),
             'end_time': appointment.end_time.isoformat(),
-            'user_email': User.email
+            'user_email': appointment.user.email
         }
         result.append(appointment_data)
     return jsonify(result)
@@ -134,7 +138,8 @@ def get_appointment():
 @app.route('/appointment/delete/<int:appointment_id>', methods=['DELETE'])
 @jwt_required()
 def delete_appointment(appointment_id):
-    user_id = get_jwt_identity
+    user_id = get_jwt_identity()
+    
     appointment = Appointment.query.filter_by(
         id=appointment_id,
         user_id=user_id
@@ -143,5 +148,6 @@ def delete_appointment(appointment_id):
     if appointment:
         database.session.delete(appointment)
         database.session.commit()
-        return jsonify({'messagem': 'Appointment deleted successfully'})
+        return jsonify({'messagem': 'Appointment deleted successfully'}), 200
+    
     return jsonify({'messagem': 'Appointment not found'}), 404
